@@ -11,6 +11,7 @@
 
 #include "../hle.h"
 #include "../textinput.h"
+#include "chat.h"
 
 #ifdef __APPLE__
 int plat_ios_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap);
