@@ -90,6 +90,7 @@ uint64_t vk_completed_seq(void);
 void vk_wait_seq(uint64_t seq);
 void vk_full_barrier(VkCommandBuffer cb);
 void vk_end_pass(void);
+void vk_abandon_frame(void);          // drop the work recorded so far, unsubmitted (iOS: the app went to the background)
 
 // Barriers name every stage and access type explicitly: AMD's 2020 Windows driver for GCN1 (R9 200) does not flush the
 // colour-attachment cache for a barrier that only says ALL_COMMANDS / MEMORY_WRITE, so later passes read stale 8x8
@@ -107,7 +108,7 @@ void vk_end_pass(void);
      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |               \
      VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |                       \
      VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT)
-void vk_submit_extra(VkSemaphore wait, VkSemaphore signal);  // submit (with binary semaphores for presentation)
+bool vk_submit_extra(VkSemaphore wait, VkSemaphore signal);  // submit (with binary semaphores for presentation); false: dropped (iOS background)
 
 // Transient GPU-visible memory that lives until the submission it was allocated for completes.
 typedef struct { VkBuffer buf; uint64_t off; void *ptr; } VkSpan;

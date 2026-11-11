@@ -39,6 +39,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #include "hle/chat.h"
 #include "settings_locale.h"
 #include "settings_panel.h"
+#include "zh_font.h"
 
 extern "C" volatile uint64_t g_present_count;  // (runtime/rt.h: frames the game presented)
 
@@ -403,6 +404,32 @@ static void forge_style(ImGuiStyle &style) {  // Forge's own (source/forge/graph
 
 // The context, ImGui's own font and Forge's style at 12 px: from the start (overlay_init_early), Forge's settings
 // once its config is read (overlay_init). (Under g_frame_lock: the loading screen may be drawing.)
+// The settings menu's Simplified Chinese (runtime/zh_font.h: Noto Sans SC, SIL OFL) is merged into the mod's font, or
+// is the font where there is none, so its strings and any Chinese text (mod names, paths) draw in every language.
+static ImFont *g_font;
+static float g_font_built_size;
+static char g_font_built_path[512];
+
+static void build_font(ImGuiIO &io, const char *font_path, float size) {
+    char path[512] = "";
+    if (font_path) snprintf(path, sizeof path, "%s", font_path);
+    if (g_font && g_font_built_size == size && !strcmp(g_font_built_path, path)) return;
+    io.Fonts->Clear();
+    ImFontConfig cfg;
+    cfg.SizePixels = size;
+    ImFont *font = path[0] ? io.Fonts->AddFontFromFileTTF(path, size, &cfg) : nullptr;
+    ImFontConfig zh;
+    zh.SizePixels = size;
+    zh.FontDataOwnedByAtlas = false;  // (a static array)
+    zh.OversampleH = zh.OversampleV = 1;  // (dense ideographs: the atlas bakes only the ones drawn)
+    if (font) zh.MergeMode = true;  // (the Chinese glyphs the mod's font hasn't)
+    ImFont *cjk = io.Fonts->AddFontFromMemoryTTF((void *)zh_font_ttf, zh_font_ttf_size, size, &zh);
+    if (!font) font = cjk ? cjk : io.Fonts->AddFontDefaultVector(&cfg);
+    io.FontDefault = g_font = font;
+    g_font_built_size = size;
+    snprintf(g_font_built_path, sizeof g_font_built_path, "%s", path);
+}
+
 static void context_init(const char *font_path, float font_size) {
     if (!ImGui::GetCurrentContext()) {
         IMGUI_CHECKVERSION();
@@ -415,11 +442,7 @@ static void context_init(const char *font_path, float font_size) {
     }
     ImGuiIO &io = ImGui::GetIO();
     g_font_size = font_size > 0 ? font_size : 12.0f;
-    ImFontConfig cfg;
-    cfg.SizePixels = g_font_size;
-    ImFont *font = font_path ? io.Fonts->AddFontFromFileTTF(font_path, g_font_size, &cfg) : nullptr;
-    if (font) io.FontDefault = font;
-    else if (io.Fonts->Fonts.Size == 0) io.Fonts->AddFontDefaultVector(&cfg);
+    build_font(io, font_path, g_font_size);
     ImGuiStyle style;
     ImGui::StyleColorsDark(&style);
     forge_style(style);

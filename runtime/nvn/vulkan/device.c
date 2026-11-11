@@ -709,6 +709,9 @@ VkRenderPass vk_window_pass(void) { return sc_pass; }
 static VkSemaphore acquire_sem[FRAMES], done_sem[SC_MAX];
 static uint64_t slot_seq[FRAMES];
 static int slot;
+#ifdef __APPLE__
+static bool sem_rebuild;  // (a frame was abandoned for the background: its acquire semaphore stays signalled)
+#endif
 
 static VkSemaphore binary_semaphore(void) {
     VkSemaphoreCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -775,6 +778,19 @@ static bool frame_begin(void) {
     int w, h;
     SDL_GetWindowSizeInPixels(ui_window(), &w, &h);
     if (!w || !h || ui_window_away()) return false;  // minimised (or the window going away: ui.c)
+#ifdef __APPLE__
+    if (sem_rebuild) {  // (a frame was abandoned for the background: fresh semaphores and swapchain)
+        sem_rebuild = false;
+        vk_wait_seq(vk_pending_seq() - 1);
+        vkDeviceWaitIdle(g_vk.dev);
+        for (int i = 0; i < FRAMES; i++) {
+            if (acquire_sem[i]) vkDestroySemaphore(g_vk.dev, acquire_sem[i], NULL);
+            acquire_sem[i] = VK_NULL_HANDLE;
+            slot_seq[i] = 0;
+        }
+        recreate_swapchain();
+    }
+#endif
 #ifdef __ANDROID__
     if (!surface_ready()) return false;
 #endif
@@ -848,6 +864,16 @@ static void *shot_thread(void *arg) {
 // End the window image's render pass and present it. shot_path: also save the window image as PNG.
 static void frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
+#ifdef __APPLE__
+    // iOS: the app went to the background with this image acquired: submit nothing, and make the swapchain (and the
+    // acquire semaphores, one of which stays signalled) again on the way back (frame_begin)
+    if (ui_window_away()) {
+        vk_abandon_frame();
+        cur_frame.ok = false;
+        sem_rebuild = true;
+        return;
+    }
+#endif
     VkCommandBuffer cb = vk_cmd();
     vkCmdEndRenderPass(cb);
     VkSpan shot = {0};
@@ -890,7 +916,13 @@ static void frame_end(const char *shot_path) {
     }
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
-    vk_submit_extra(cur_frame.acquired, done_sem[img]);
+    if (!vk_submit_extra(cur_frame.acquired, done_sem[img])) {  // (iOS: the background took it: nothing was presented)
+        cur_frame.ok = false;
+#ifdef __APPLE__
+        sem_rebuild = true;
+#endif
+        return;
+    }
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
@@ -951,6 +983,9 @@ static bool shot_frame(uint64_t f) {
 }
 
 void backend_present(NvnTexture *t) {
+#ifdef __APPLE__
+    if (ui_window_away()) return;  // (iOS: no GPU work in the background: runtime/nvn/vulkan/exec.c)
+#endif
     extern void vi_apply_framerate(void);
     vi_apply_framerate();
     vk_lock();

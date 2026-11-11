@@ -246,8 +246,13 @@ static void set_window_icon(void) {}
 // app that draws in the background (an event watch: acted on before the call returns).
 static bool ios_lifecycle(void *ud, SDL_Event *e) {
     (void)ud;
-    if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) SDL_SetAtomicInt(&away, 1);
-    else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) SDL_SetAtomicInt(&away, 0);
+    if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+        SDL_SetAtomicInt(&away, 1);
+        LOG("[ui] to the background: no GPU work until the app comes back\n");
+    } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+        SDL_SetAtomicInt(&away, 0);
+        LOG("[ui] back in the foreground: drawing again\n");
+    }
     return true;
 }
 #endif

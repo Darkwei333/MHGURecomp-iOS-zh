@@ -29,6 +29,10 @@
 #include "shaders.h"
 #include "vk.h"
 
+#ifdef __APPLE__
+extern bool ui_window_away(void);  // (runtime/ui.c: iOS has the app in the background)
+#endif
+
 static uint64_t stat_draws, stat_skipped, stat_passes, stat_dispatches, stat_snapshots;
 // (MHGU_VK_STATS) time spent: translating command lists, waiting for the GPU, guest memory copied per submission
 uint64_t stat_exec_ns, stat_wait_ns, stat_copy_bytes, stat_upload_ns;
@@ -196,12 +200,17 @@ void vk_full_barrier(VkCommandBuffer cb) {
 }
 
 static void guest_copy_new_submission(void);
+static void background_discard(void);
 
 // Submit the pending work (if any). wait / signal: binary semaphores for presentation (may be null).
-void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
+bool vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
+#ifdef __APPLE__
+    // iOS: no GPU work while the app is in the background (see background_discard)
+    if (ui_window_away()) { background_discard(); return false; }
+#endif
     vk_end_pass();
     Sub *s = sub();
-    if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
+    if (!s->main_begun && !s->upload_begun && !wait && !signal) return true;
     VkCommandBuffer cbs[2];
     uint32_t n = 0;
     if (s->upload_begun) {
@@ -241,9 +250,10 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
     cur_sub = (cur_sub + 1) % SUBS;
     guest_copy_new_submission();
     vk_collect_dead();
+    return true;
 }
 
-static void renderer_submit(void) { vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE); }
+static void renderer_submit(void) { (void)vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE); }
 
 void renderer_flush(void) {
     if (vk_exiting()) return;
@@ -383,6 +393,32 @@ static VkSpan guest_copy(uint64_t addr, uint64_t size) {
     gcopy[slot].addr = addr; gcopy[slot].size = size; gcopy[slot].gen = gcopy_gen; gcopy[slot].span = s;
     return s;
 }
+
+// iOS: the app went to the background with work recorded: drop it, never submit it (the system kills an app that
+// submits GPU work from the background: "Insufficient Permission (to submit GPU work from background)", device lost).
+// The buffers are reset for reuse; the copies the dropped work took from guest memory never reach the GPU, so their
+// chunks can be used again. (Under the Vulkan lock.)
+static void background_discard(void) {
+    vk_end_pass();
+    Sub *s = &subs[cur_sub];
+    if (s->main_begun) {
+        vkEndCommandBuffer(s->main);
+        vkResetCommandBuffer(s->main, 0);
+        s->main_begun = false;
+    }
+    if (s->upload_begun) {
+        vkEndCommandBuffer(s->upload);
+        vkResetCommandBuffer(s->upload, 0);
+        s->upload_begun = false;
+    }
+    for (int i = 0; i < s->npools; i++) vkResetDescriptorPool(g_vk.dev, s->pools[i], 0);
+    s->cur_pool = 0;
+    for (int i = 0; i < nchunks; i++)
+        if (chunks[i].seq > submit_seq) chunks[i].seq = submit_seq;
+    gcopy_gen++;
+}
+
+void vk_abandon_frame(void) { background_discard(); }
 
 // Vertex streams: a draw binds the rest of a vertex pool from where its own vertices start, so the draws of one pool
 // (the equipment box's icons, one quad each) bind ranges that share their end. The first copy (or vertex cache buffer)
@@ -4767,6 +4803,9 @@ static void exec_list(uint64_t handle, int depth) {
 }
 
 void backend_execute(uint64_t handle) {
+#ifdef __APPLE__
+    if (ui_window_away()) return;  // (iOS: no GPU work in the background; see background_discard)
+#endif
     vk_lock();
     plist_drain();  // (the pipeline list's programs the prewarm met)
     uint64_t t0 = plat_now_ns();

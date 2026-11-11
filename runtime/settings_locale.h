@@ -1,8 +1,10 @@
 // Host UI only; INI keys and game content remain language-independent.
 #pragma once
 #include <string.h>
+#include "settings_locale_zh.h"
 
 static inline const char *settings_text(int language, const char *english) {
+    if (language == 2) return settings_text_zh(english);
     if (language != 1) return english;
     static const struct { const char *en, *es; } messages[] = {
         {"SETTINGS", "OPCIONES"},
