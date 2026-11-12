@@ -125,7 +125,7 @@
     .mute_in_background = 0,                                                                        \
     /* [Application] */                                                                             \
     .confirm_exit = 1,                                                                              \
-    .language = 0,                                                                                  \
+    .language = 2,  /* Simplified Chinese: this build's menu has it (runtime/settings_locale_zh.h) */ \
     .button_icons = 0,                                                                              \
     .menu_theme = THEME_HUNTER,                                                                     \
     .menu_scale = 100,                                                                              \
@@ -543,8 +543,8 @@ static const char DEFAULT_INI[] =
     "\n"
     "; Language of the settings menu (F1, or Minus + Plus on a controller)\n"
     "; English, Spanish, Chinese\n"
-    "; Default: English\n"
-    "Language = English\n"
+    "; Default: Chinese\n"
+    "Language = Chinese\n"
     "\n"
     "; Button icons in the settings menu\n"
     "; Xbox, Switch, PlayStation\n"
@@ -1178,6 +1178,29 @@ static void append_missing_sections(const char *path, const char *seen) {
     if (o) fclose(o);
 }
 
+// This build's settings menu has a Simplified Chinese translation, which the releases before it did not: their
+// mhgurecomp.ini says "Language = English" because that was the default, not because the player picked it. So an older
+// file starts in Chinese once, and gets the new language comment (the marker: after that, the menu's Language switch is
+// the player's choice, English included). A fresh file (DEFAULT_INI) already has the comment.
+static void language_migrate(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    bool known = false;
+    char line[4096];
+    while (!known && fgets(line, sizeof line, f)) known = strstr(line, "English, Spanish, Chinese") != NULL;
+    bool bad = ferror(f) != 0;
+    fclose(f);
+    if (bad) return;
+    if (!known) {
+        if (!g_config.language) g_config.language = 2;  // (2: Chinese, runtime/settings_locale.h)
+        LOG("[config] its menu language defaulted to Chinese: the settings menu has a Chinese translation now\n");
+    }
+    if (!known && (f = fopen(path, "ab"))) {  // (mark it: the next start leaves an English choice alone)
+        fputs("\n; Language of the settings menu (F1, or Minus + Plus on a controller)\n; English, Spanish, Chinese\n", f);
+        fclose(f);
+    }
+}
+
 void config_load(void) {
     char path[1100];
     config_path(path, sizeof path);
@@ -1210,6 +1233,7 @@ void config_load(void) {
         fclose(f);
         append_missing_sections(path, seen);
     }
+    language_migrate(path);
 
     // Keep Auto/Desktop and file values, rather than persisting temporary environment overrides.
     render_auto = !g_config.render_w;
