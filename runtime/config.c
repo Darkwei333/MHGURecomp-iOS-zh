@@ -1190,15 +1190,20 @@ static void language_migrate(const char *path) {
     while (!known && fgets(line, sizeof line, f)) known = strstr(line, "English, Spanish, Chinese") != NULL;
     bool bad = ferror(f) != 0;
     fclose(f);
-    if (bad) return;
-    if (!known) {
-        if (!g_config.language) g_config.language = 2;  // (2: Chinese, runtime/settings_locale.h)
-        LOG("[config] its menu language defaulted to Chinese: the settings menu has a Chinese translation now\n");
+    if (bad || known) return;
+    bool chinese = !g_config.language;
+    if (chinese) g_config.language = 2;
+    char error[220];
+    if (!config_save(&g_config, error, sizeof error)) {  // (writes "Language = Chinese": the next start keeps it)
+        LOG("[config] could not write %s: %s\n", path, error);
+        return;
     }
-    if (!known && (f = fopen(path, "ab"))) {  // (mark it: the next start leaves an English choice alone)
-        fputs("\n; Language of the settings menu (F1, or Minus + Plus on a controller)\n; English, Spanish, Chinese\n", f);
+    if ((f = fopen(path, "ab"))) {  // (mark it: from now on the menu's Language switch is the player's choice)
+        fputs("\n; Language of the settings menu (F1, or Minus + Plus on a controller)\n"
+              "; English, Spanish, Chinese\n", f);
         fclose(f);
     }
+    if (chinese) LOG("[config] this build's settings menu has Chinese: it starts in Chinese (Application > Language)\n");
 }
 
 void config_load(void) {
